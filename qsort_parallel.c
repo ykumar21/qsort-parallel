@@ -10,8 +10,8 @@
 
 /* Global Variables */
 pthread_mutex_t lock;
-sem_t start_collect;
-sem_t start_pivot;
+sem_t SEM_WORKER;
+sem_t SEM_MASTER;
 
 /* Number of worked threads */ 
 unsigned int num_threads = 4;
@@ -57,7 +57,7 @@ void init_array() {
 }
 
 /* Create args for worker threads */
-struct Args *create_args(unsigned int tid) {
+struct Args *create_args(unsigned int tid, int *arr) {
     struct Args * args = (struct Args * ) malloc(sizeof(struct Args));
     args -> tid = tid;
     args -> arr = arr;
@@ -122,11 +122,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
     // initialise semaphore 
-    sem_init( & start_collect, 0, 0);
-    sem_init( & start_pivot, 0, 0);
+    sem_init( &SEM_WORKER, 0, 0);
+    sem_init( &SEM_MASTER, 0, 0);
 
     pthread_t collector_thread; // collector thread
     pthread_t workers[num_threads]; // worker threads for sorting 
+
+    /* Initialise shared arrays */ 
+    init_array();
 
     /* Prepare arguments for collector thread */
     struct Args * collect_args = (struct Args * ) malloc(sizeof(struct Args));
@@ -135,9 +138,10 @@ int main(int argc, char ** argv) {
 
     pthread_create( & collector_thread, NULL, collect, (void * ) collect_args);
 
+
     for (int i = 0; i < num_threads; ++i) {
         /* Create arguments for ith worker thread */ 
-        struct Args *args = create_args(i);
+        struct Args *args = create_args(i, arr);
         
         if (args -> start < args -> end) {
             pthread_create( & workers[i], NULL, csort, (void * ) args);
@@ -149,7 +153,7 @@ int main(int argc, char ** argv) {
         pthread_join(workers[i], NULL);
     }
 
-    pthread_mutex_destroy( & lock);
+    pthread_mutex_destroy(&lock);
 
     printf("\nSorted Array: ");
     print_arr(arr, N);
@@ -168,14 +172,11 @@ void print_arr(int * arr, size_t num_el) {
 }
 
 void *collect(void * arguments) {
-    struct Args * args = (struct Args * ) arguments;
-
+    struct Args *args = (struct Args * ) arguments;
     int threads_posted = 0;
 
-    /* Wait for collection */ 
-    sem_wait(&start_collect);
-
-    pthread_mutex_lock(&lock); // acquire lock 
+    sem_wait(&SEM_MASTER);
+    pthread_mutex_lock(&lock); 
 
     printf("\n\nCollector Thread Activate....\n");
     for (int i = 0; i < args -> total_samples; ++i) {
@@ -197,14 +198,14 @@ void *collect(void * arguments) {
 
     /* Broadcast worker threads */ 
     for (int i = 0; i < num_threads; ++i) 
-        sem_post(&start_pivot);
+        sem_post(&SEM_WORKER);
 
     printf("Collector thread says bye!\n");
     return 0;
 }
 
 void * csort(void * args) {
-    pthread_mutex_lock( & lock); // acquire lock 
+    pthread_mutex_lock( &lock); // acquire lock 
 
     /* Get all the arguments */ 
     int * arr = ((struct Args * ) args)->arr;
@@ -231,10 +232,10 @@ void * csort(void * args) {
         samples[cur_sample++] = subset[index];
     }
 
-    if (cur_sample == total_samples) sem_post( & start_collect);
-    pthread_mutex_unlock( & lock); // release lock    
+    if (cur_sample == total_samples) sem_post(&SEM_MASTER);
+    pthread_mutex_unlock(&lock); // release lock    
 
-    sem_wait( & start_pivot);
+    sem_wait(&SEM_WORKER);
 
     // remove from production 
     #ifdef DEBUG
